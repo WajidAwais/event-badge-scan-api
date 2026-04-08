@@ -7,6 +7,8 @@
     "build": "tsc",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "dev": "tsx watch --env-file=.env index.ts",
+    "fake-upstream": "node dist/src/fake-upstream/main.js",
+    "dev:fake-upstream": "tsx src/fake-upstream/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "lint": "eslint ."
