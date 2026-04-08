@@ -17,6 +17,11 @@ export interface ScanSearchParams {
   offset?: number;
 }
 
+/** Escapes LIKE wildcards so user input such as "50%" or "a_b" matches literally. */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 export function createScanRepository(db: Database.Database) {
   const insertStmt = db.prepare<[string, string, string]>(`
     INSERT OR IGNORE INTO scans (badge_id, booth_name, scan_date)
@@ -53,12 +58,12 @@ export function createScanRepository(db: Database.Database) {
         args.push(badgeId);
       }
       if (boothName) {
-        conditions.push("booth_name LIKE ?");
-        args.push(`%${boothName}%`);
+        conditions.push("booth_name LIKE ? ESCAPE '\\'");
+        args.push(`%${escapeLike(boothName)}%`);
       }
       if (scanDate) {
-        conditions.push("scan_date LIKE ?");
-        args.push(`${scanDate}%`);
+        conditions.push("scan_date LIKE ? ESCAPE '\\'");
+        args.push(`${escapeLike(scanDate)}%`);
       }
 
       const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
