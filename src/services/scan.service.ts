@@ -11,9 +11,11 @@ import { env } from "../config/env.js";
 import { parseScanDate, toCanonicalScanDate } from "../utils/scan-date.js";
 
 export function toValidScan(raw: RawScan): Scan | null {
-  const boothName = raw.customFields?.[0]?.["Booth Name"];
-  if (!boothName || boothName.trim() === "") return null;
-  return { badgeId: raw.badgeId, boothName: boothName.trim(), scanDate: toCanonicalScanDate(raw.scanDate) };
+  const boothName = raw.customFields
+    ?.map((fields) => fields["Booth Name"]?.trim())
+    .find((name) => name !== undefined && name !== "");
+  if (!boothName) return null;
+  return { badgeId: raw.badgeId, boothName, scanDate: toCanonicalScanDate(raw.scanDate) };
 }
 
 /**

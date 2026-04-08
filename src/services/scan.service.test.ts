@@ -5,7 +5,7 @@ import { openDatabase } from "../db/client.js";
 import { createCheckpointRepository } from "../repositories/checkpoint.repository.js";
 import { createPlayerRepository } from "../repositories/player.repository.js";
 import { fetchAllScansInRange } from "./poller.service.js";
-import { runPollCycle } from "./scan.service.js";
+import { runPollCycle, toValidScan } from "./scan.service.js";
 
 vi.mock("./poller.service.js", () => ({ fetchAllScansInRange: vi.fn() }));
 vi.mock("../websocket/broadcaster.js", () => ({ broadcastPlayerCounts: vi.fn() }));
@@ -57,5 +57,21 @@ describe("runPollCycle", () => {
     serveBatches();
     await runPollCycle(db);
     expect(vi.mocked(fetchAllScansInRange).mock.calls[0]?.[0]).toBe("2026-02-04T10:00:00.499Z");
+  });
+});
+
+describe("toValidScan", () => {
+  it("takes the booth name from whichever custom-fields entry carries it", () => {
+    const raw: RawScan = {
+      badgeId: "demo-badge-003",
+      scanDate: "2026-02-04T10:00:00",
+      customFields: [{ Company: "Demo Co" }, { "Booth Name": "  Hall B  " }],
+    };
+    expect(toValidScan(raw)?.boothName).toBe("Hall B");
+  });
+
+  it("drops scans with no usable booth name", () => {
+    expect(toValidScan({ badgeId: "x", scanDate: "2026-02-04T10:00:00", customFields: [{ "Booth Name": " " }] })).toBeNull();
+    expect(toValidScan({ badgeId: "x", scanDate: "2026-02-04T10:00:00" })).toBeNull();
   });
 });
