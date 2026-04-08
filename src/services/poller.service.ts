@@ -46,7 +46,7 @@ async function fetchBatchBetween(source: ScanSource, loMs: number, hiMs: number)
     throw new Error(`Scan API returned status ${response.status}`);
   }
 
-  const contentType = response.headers["content-type"] ?? "";
+  const contentType = String(response.headers["content-type"] ?? "");
   if (!contentType.includes("application/json")) {
     logger.error({ contentType, url }, "Scan API response is not JSON");
     throw new Error("Scan API response must be application/json");
