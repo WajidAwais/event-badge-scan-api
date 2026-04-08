@@ -5,14 +5,7 @@ import { ApiResponseSchema } from "../types/api.js";
 import type { RawScan } from "../types/api.js";
 import { retryWithBackoff } from "../utils/retry.js";
 import { logger } from "../utils/logger.js";
-
-function parseMs(iso: string): number {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) {
-    throw new Error(`Invalid date string: ${iso}`);
-  }
-  return t;
-}
+import { parseScanDate } from "../utils/scan-date.js";
 
 /** Keep millisecond precision so split windows do not round away boundary rows. */
 function boundsToQueryParams(loMs: number, hiMs: number): { scanDateGT: string; scanDateLT: string } {
@@ -122,8 +115,8 @@ export async function* fetchAllScansInRange(
   fromDate: string,
   upperBoundExclusive: string,
 ): AsyncGenerator<RawScan[]> {
-  const loMs = parseMs(fromDate);
-  const hiMs = parseMs(upperBoundExclusive);
+  const loMs = parseScanDate(fromDate);
+  const hiMs = parseScanDate(upperBoundExclusive);
   if (loMs >= hiMs) {
     logger.warn({ fromDate, upperBoundExclusive }, "Empty fetch range (lower >= upper), skipping");
     return;

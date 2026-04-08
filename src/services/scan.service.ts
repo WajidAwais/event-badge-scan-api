@@ -8,11 +8,12 @@ import { fetchAllScansInRange } from "./poller.service.js";
 import { broadcastPlayerCounts } from "../websocket/broadcaster.js";
 import { logger } from "../utils/logger.js";
 import { env } from "../config/env.js";
+import { parseScanDate, toCanonicalScanDate } from "../utils/scan-date.js";
 
-function toValidScan(raw: RawScan): Scan | null {
+export function toValidScan(raw: RawScan): Scan | null {
   const boothName = raw.customFields?.[0]?.["Booth Name"];
   if (!boothName || boothName.trim() === "") return null;
-  return { badgeId: raw.badgeId, boothName: boothName.trim(), scanDate: raw.scanDate };
+  return { badgeId: raw.badgeId, boothName: boothName.trim(), scanDate: toCanonicalScanDate(raw.scanDate) };
 }
 
 /**
@@ -25,7 +26,7 @@ export async function runPollCycle(db: Database.Database): Promise<void> {
   const checkpointRepo = createCheckpointRepository(db);
 
   const checkpoint = checkpointRepo.getLastScanDate();
-  const fromDate = checkpoint ? new Date(Date.parse(checkpoint) - 1).toISOString() : env.EVENT_START_DATE;
+  const fromDate = checkpoint ? new Date(parseScanDate(checkpoint) - 1).toISOString() : env.EVENT_START_DATE;
   const upperBoundExclusive = new Date().toISOString();
 
   logger.info({ fromDate, upperBoundExclusive }, "Poll cycle started");
@@ -38,9 +39,9 @@ export async function runPollCycle(db: Database.Database): Promise<void> {
       return scan ? [scan] : [];
     });
 
-    const maxDateInBatch = rawBatch.reduce<string>((max, r) => {
-      return r.scanDate > max ? r.scanDate : max;
-    }, rawBatch[0]?.scanDate ?? fromDate);
+    // Compare instants, not strings: provider spellings of one instant can differ.
+    const maxMsInBatch = Math.max(...rawBatch.map((r) => parseScanDate(r.scanDate)));
+    const maxDateInBatch = new Date(maxMsInBatch).toISOString();
 
     // Persist the batch + advance checkpoint in a single transaction so a crash
     // mid-batch leaves the checkpoint unchanged and the batch will be re-fetched.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseScanDate } from "../utils/scan-date.js";
 
 /**
  * Each element in `customFields` is a flat object of arbitrary string key/value pairs.
@@ -8,7 +9,14 @@ const CustomFieldSchema = z.record(z.string(), z.string());
 
 export const RawScanSchema = z.object({
   badgeId: z.string(),
-  scanDate: z.string(),
+  scanDate: z.string().refine((value) => {
+    try {
+      parseScanDate(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }, "scanDate must be a parseable timestamp"),
   customFields: z.array(CustomFieldSchema).optional(),
 });
 
