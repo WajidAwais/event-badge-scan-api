@@ -17,16 +17,11 @@ export async function retryWithBackoff<T>(
       return await fn();
     } catch (err) {
       lastError = err;
-      const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
+      if (attempt === maxAttempts) break;
 
-      logger.warn(
-        { attempt, maxAttempts, delayMs },
-        "Operation failed, retrying...",
-      );
-
-      if (attempt < maxAttempts) {
-        await sleep(delayMs);
-      }
+      const delayMs = baseDelayMs * 2 ** (attempt - 1);
+      logger.warn({ attempt, maxAttempts, delayMs }, "Operation failed, retrying");
+      await sleep(delayMs);
     }
   }
 

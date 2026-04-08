@@ -1,46 +1,29 @@
 import express from "express";
 import request from "supertest";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { UnauthorizedError } from "../errors/app-error.js";
-import { syncHandler } from "./async-handler.js";
+import { AppError } from "../errors/app-error.js";
 import { errorHandler } from "./error-handler.js";
 import { notFoundHandler } from "./not-found.js";
 import healthRouter from "../routes/health.js";
-
-vi.mock("../../utils/logger.js", () => ({
-  logger: {
-    error: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    debug: vi.fn(),
-    trace: vi.fn(),
-    fatal: vi.fn(),
-  },
-}));
 
 function createTestApp(): express.Express {
   const app = express();
   app.use(express.json());
   app.use(healthRouter);
-  app.get(
-    "/__test/unauthorized",
-    syncHandler((_req, _res) => {
-      throw new UnauthorizedError("Invalid token");
-    }),
-  );
-  app.get(
-    "/__test/zod",
-    syncHandler((_req, _res) => {
-      z.object({ n: z.number() }).parse({ n: "not-a-number" });
-    }),
-  );
-  app.get(
-    "/__test/500",
-    syncHandler((_req, _res) => {
-      throw new Error("boom");
-    }),
-  );
+  app.get("/__test/unauthorized", () => {
+    throw new AppError(401, "UNAUTHORIZED", "Invalid token");
+  });
+  app.get("/__test/zod", () => {
+    z.object({ n: z.number() }).parse({ n: "not-a-number" });
+  });
+  app.get("/__test/500", () => {
+    throw new Error("boom");
+  });
+  app.get("/__test/async", async () => {
+    await Promise.resolve();
+    throw new AppError(503, "UPSTREAM_DOWN", "Try later");
+  });
   app.use(notFoundHandler);
   app.use(errorHandler);
   return app;
@@ -66,7 +49,12 @@ describe("API envelope and errorHandler", () => {
     });
   });
 
-  it("UnauthorizedError returns 401 envelope", async () => {
+  it("rejected async handlers reach the error middleware", async () => {
+    const res = await request(createTestApp()).get("/__test/async").expect(503);
+    expect(res.body.error).toEqual({ code: "UPSTREAM_DOWN", message: "Try later", details: null });
+  });
+
+  it("AppError returns its status and code", async () => {
     const res = await request(createTestApp()).get("/__test/unauthorized").expect(401);
     expect(res.body).toMatchObject({
       success: false,

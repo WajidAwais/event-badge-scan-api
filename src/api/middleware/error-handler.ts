@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 import { logger } from "../../utils/logger.js";
 import { AppError } from "../errors/app-error.js";
 import { sendFailure } from "../utils/respond.js";
@@ -18,7 +18,7 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     sendFailure(res, 422, {
       code: "VALIDATION_ERROR",
       message: "Validation failed",
-      details: err.flatten(),
+      details: z.flattenError(err),
     });
     return;
   }
@@ -31,18 +31,10 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
       );
     }
 
-    const safe = hideDebugInfo();
-    const details =
-      err.details !== null && err.details !== undefined
-        ? safe
-          ? sanitizeDetails(err.details)
-          : err.details
-        : null;
-
     sendFailure(res, err.statusCode, {
       code: err.code,
       message: err.message,
-      details,
+      details: err.details ?? null,
     });
     return;
   }
@@ -59,9 +51,3 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
   });
 }
 
-function sanitizeDetails(details: unknown): unknown {
-  if (details === null || typeof details !== "object") {
-    return details;
-  }
-  return details;
-}

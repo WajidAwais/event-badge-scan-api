@@ -37,11 +37,6 @@ export function createScanRepository(db: Database.Database) {
       return result.changes > 0;
     },
 
-    getAllScans(): ScanRow[] {
-      return db
-        .prepare<[], ScanRow>("SELECT * FROM scans ORDER BY scan_date ASC")
-        .all();
-    },
 
     /**
      * Flexible search: filter by badgeId, boothName (partial, case-insensitive),

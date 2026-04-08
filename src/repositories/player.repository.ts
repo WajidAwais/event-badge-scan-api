@@ -29,7 +29,7 @@ export function createPlayerRepository(db: Database.Database) {
   const selectAllStmt = db.prepare<[], PlayerRow>(`
     SELECT badge_id, scan_count, last_scan_date, updated_at
     FROM player_scan_counts
-    ORDER BY scan_count DESC
+    ORDER BY scan_count DESC, badge_id ASC
   `);
 
   const selectOneStmt = db.prepare<[string], PlayerRow>(`
@@ -41,14 +41,14 @@ export function createPlayerRepository(db: Database.Database) {
   const selectTopStmt = db.prepare<[], PlayerRow>(`
     SELECT badge_id, scan_count, last_scan_date, updated_at
     FROM player_scan_counts
-    ORDER BY scan_count DESC
+    ORDER BY scan_count DESC, badge_id ASC
     LIMIT 1
   `);
 
   const selectBottomStmt = db.prepare<[], PlayerRow>(`
     SELECT badge_id, scan_count, last_scan_date, updated_at
     FROM player_scan_counts
-    ORDER BY scan_count ASC
+    ORDER BY scan_count ASC, badge_id ASC
     LIMIT 1
   `);
 
