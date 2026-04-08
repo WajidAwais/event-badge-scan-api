@@ -1,64 +1,181 @@
 # Booth scan tracking service
 
-A TypeScript backend that imports event-booth scans, stores deduplicated counts in SQLite, and sends player snapshots over WebSocket. It is an integration prototype for an EventsCloud-style scan endpoint, not a verified production event platform.
+A TypeScript service that imports event-booth badge scans from a scan provider, keeps deduplicated per-badge counts in SQLite, and pushes count updates to WebSocket clients. It suits a game or leaderboard that rewards attendees for visiting booths: the provider only returns raw scans, and this service turns them into a queryable, live-updating tally.
+
+It was built as an integration prototype for an EventsCloud-style scan endpoint. The repository ships a local fake provider with seeded demo data, so everything below runs without a provider account or real attendee data.
 
 ```mermaid
 flowchart LR
-  Scheduler --> Poller[Bounded HTTP fetch and time-window subdivision]
-  Poller --> Validation[Zod response validation]
-  Validation --> Transaction[SQLite scan/count/checkpoint transaction]
-  Transaction --> REST[Read-only HTTP queries]
-  Transaction --> WS[WebSocket player snapshots]
+  Provider[(Scan provider<br/>or bundled fake)] -- "POST ?scanDateGT&scanDateLT<br/>max 1,000 rows" --> Poller
+  Scheduler[node-cron tick] --> Poller[Poller<br/>window subdivision + retry]
+  Poller --> Validate[Zod schema<br/>UTC normalisation]
+  Validate --> Tx[SQLite transaction<br/>scans + counts + checkpoint]
+  Tx --> REST[Read-only REST API]
+  Tx -- "batch added scans" --> WS[WebSocket update]
 ```
 
-## Run deliberately
+## Run it
 
-Use Node.js 22. Install from the lock file, inspect the environment example, and configure your own authorized provider token:
+### With Docker Compose
+
+```sh
+docker compose up --build
+```
+
+This starts two containers from one image:
+
+- `fake-upstream` serves 2,500 seeded scans across 40 demo badges and five booths on 4 February 2026.
+- `api` polls it at startup and then every 15 seconds. It listens on `http://127.0.0.1:3000` and stores its SQLite file in the `scan-data` volume.
+
+The first poll imports 2,416 scans; the other 84 have no booth name and are skipped. Then check the API:
+
+```sh
+curl -s http://127.0.0.1:3000/players/top
+```
+
+`docker compose down -v` stops the stack and deletes the database volume.
+
+### With Node.js
+
+Node 22.13 or newer is required (`.nvmrc` pins 22). `better-sqlite3` is a native module. npm downloads a prebuilt binary for common platforms and otherwise compiles it, which needs Python and a C++ toolchain.
 
 ```sh
 npm ci
-cp .env.example .env
 npm run build
-npm start
+cp .env.example .env
+npm run fake-upstream   # terminal 1: fake provider on 127.0.0.1:4010
+npm start               # terminal 2: API on 127.0.0.1:3000, reads .env
 ```
 
-Set `API_TOKEN`, `API_URL`, and `EVENT_START_DATE` for your permitted event. `DB_PATH` defaults to a local SQLite file; the database schema is initialized at startup. The server binds to `127.0.0.1:3000`. **Starting the server immediately polls the configured provider**, then follows `POLL_INTERVAL_CRON` (default every five minutes). No live provider or event account was accessed during this review.
+During development, `npm run dev` runs `index.ts` through tsx watch.
 
-Native `better-sqlite3` installation is required for the real server. The review installed dependencies with scripts disabled and did not build or load that native driver. Do not infer end-to-end SQLite verification from the tests below.
+## Configuration
 
-## Read API
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `API_URL` | required | Provider scan endpoint (http or https) |
+| `API_TOKEN` | required | Sent as `{"token": ...}` in each request body |
+| `EVENT_START_DATE` | `1970-01-01T00:00:00.000Z` | Where the first poll starts when no checkpoint exists |
+| `POLL_INTERVAL_CRON` | `*/5 * * * *` | node-cron expression; six fields adds seconds |
+| `DB_PATH` | `./data/booth-scans.db` | SQLite file; the directory is created if missing |
+| `HOST` / `PORT` | `127.0.0.1` / `3000` | Listen address. The image sets `HOST=0.0.0.0` |
+| `LOG_LEVEL` | `info` | pino level, or `silent` |
+| `API_DEBUG_ERRORS` | unset | `true` puts 500 error messages and stacks in responses |
 
-| Route | Result |
+`.env.example` points at the fake provider with the token `demo-token`. To poll a real provider, replace both values with credentials you are authorised to use. Starting the server polls immediately.
+
+## HTTP API
+
+Every response uses one envelope: `{"success": bool, "data": ..., "error": null | {code, message, details}}`.
+
+| Route | Returns |
 | --- | --- |
-| `GET /health` | Liveness response; not a provider freshness check |
-| `GET /players` | All known badge counts |
-| `GET /players/top`, `/players/bottom` | Maximum/minimum count, or 404 when empty |
-| `GET /players/:badgeId` | Badge count and up to 1,000 matching scan records |
-| `GET /scans` | Filtered scans, default 50, maximum 500; offset pagination |
+| `GET /health` | Liveness only; it does not check the provider |
+| `GET /players` | All badges with counts, highest first (ties by badge id) |
+| `GET /players/top`, `/players/bottom` | One badge, or 404 `PLAYERS_EMPTY` before any import |
+| `GET /players/:badgeId` | The badge's count and up to 1,000 of its scans, oldest first |
+| `GET /scans` | Filtered scans, oldest first, with offset paging |
 
-Scan filters are `badgeId` (exact), `boothName` (partial), and `scanDate` (prefix). Results use an envelope with `success`, `data`, and `error`. A synthetic example is:
+`/scans` accepts these filters:
 
-```json
-{"success":true,"data":{"scans":[{"badgeId":"demo-badge-001","boothName":"Demo booth","scanDate":"2026-02-04T10:00:00"}],"total":1,"limit":50,"offset":0},"error":null}
-```
+- `badgeId`: exact match.
+- `boothName`: case-insensitive substring.
+- `scanDate`: UTC prefix, such as `2026-02-04` or `2026-02-04T09`.
+- `limit`: 1 to 500, default 50.
+- `offset`: default 0.
 
-WebSocket clients receive an initial snapshot and count updates after batches. There is no UI or screenshot to capture. The original README's unwrapped responses did not match the implementation; this example does.
+`%` and `_` in filters are matched literally.
 
-## Import behavior and limits
-
-The provider request uses exclusive `scanDateGT` / `scanDateLT` bounds and a JSON token body. Responses at the 1,000-record cap trigger recursive time-window subdivision. Millisecond precision and a one-millisecond overlap at split boundaries preserve exact-boundary rows. Restart polling replays the checkpoint millisecond, relying on the database uniqueness constraint to ignore duplicates. HTTP redirects are disabled and responses are limited to 8 MiB; retry logs omit raw transport errors that might carry credentials.
-
-Each batch atomically inserts scans, increments player counts, and saves its maximum timestamp. Deduplication remains `(badgeId, scanDate)`: two different booths for the same badge at the same instant collapse into one record. Booth names are read only from the first custom-fields object. Provider timestamp timezone, precision, truncation rules, ordering, late-arrival behavior, and real request contract are not independently verified. At a saturated indivisible timestamp the importer fails instead of claiming completeness. These constraints prevent a blanket “no scans missed” guarantee.
-
-## Verification and deployment gaps
+The examples below were captured from the Compose stack. Long arrays are shortened with `...`.
 
 ```sh
-npm test
-npm run build
+curl -s 'http://127.0.0.1:3000/players/top'
 ```
 
-Eleven Vitest tests and TypeScript compilation pass. Tests mock HTTP calls and include a synthetic 1,001-record response with an exact split-boundary record, plus API error handling. No provider calls, native SQLite integration, cron run, or live WebSocket session was performed.
+```json
+{"success":true,"data":{"player":{"badgeId":"demo-badge-003","scanCount":82,"lastScanDate":"2026-02-04T15:59:04.196Z"}},"error":null}
+```
 
-HTTP queries and WebSocket snapshots are currently unauthenticated and can disclose badge visit histories. Keep this local until event access rules, retention, and an authenticated deployment boundary are defined. Player snapshots are unbounded; graceful shutdown does not fully drain active sockets and polling work. Scaling needs measured event volumes and single-writer/multi-worker design rather than a production-grade label.
+```sh
+curl -s 'http://127.0.0.1:3000/players/demo-badge-007'
+```
 
-Committed SQLite WAL/SHM sidecars were removed from reachable history and ignored. README badge identifiers were replaced by obvious synthetic examples. Whether the original files represented real event data remains an owner decision; deleting Git references cannot revoke copies already downloaded.
+```json
+{"success":true,"data":{"badgeId":"demo-badge-007","scanCount":64,"lastScanDate":"2026-02-04T15:49:08.982Z","scans":[{"boothName":"Hall C / Sponsor Lounge","scanDate":"2026-02-04T08:08:25.868Z"},{"boothName":"Hall B / Merch","scanDate":"2026-02-04T08:11:56.057Z"},...]},"error":null}
+```
+
+```sh
+curl -s 'http://127.0.0.1:3000/scans?boothName=coffee&limit=2'
+```
+
+```json
+{"success":true,"data":{"scans":[{"badgeId":"demo-badge-011","boothName":"Hall A / Coffee Bar","scanDate":"2026-02-04T08:00:09.439Z"},{"badgeId":"demo-badge-024","boothName":"Hall A / Coffee Bar","scanDate":"2026-02-04T08:00:22.253Z"}],"total":485,"limit":2,"offset":0},"error":null}
+```
+
+Errors use the same envelope:
+
+```sh
+curl -s 'http://127.0.0.1:3000/scans?limit=501'     # 422
+curl -s 'http://127.0.0.1:3000/players/nobody'      # 404
+```
+
+```json
+{"success":false,"data":null,"error":{"code":"VALIDATION_ERROR","message":"Validation failed","details":{"formErrors":[],"fieldErrors":{"limit":["Too big: expected number to be <=500"]}}}}
+{"success":false,"data":null,"error":{"code":"PLAYER_NOT_FOUND","message":"Player not found","details":{"badgeId":"nobody"}}}
+```
+
+## WebSocket feed
+
+Connect to `ws://127.0.0.1:3000/` (any path). The server sends a `snapshot` with every badge's count. After each imported batch that adds at least one new scan, it sends an `update` with the full list:
+
+```json
+{"type":"snapshot","players":[{"badgeId":"demo-badge-003","scanCount":82,"lastScanDate":"2026-02-04T15:59:04.196Z"},...]}
+```
+
+The fake provider can add a live scan stamped "now", which the next poll picks up:
+
+```sh
+docker compose exec api node -e 'fetch("http://fake-upstream:4010/demo/scans",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token:"demo-token",badgeId:"demo-badge-041",boothName:"Hall C / Sponsor Lounge"})}).then(r=>r.text()).then(console.log)'
+```
+
+Within 15 seconds, connected clients receive the update. In the captured run it listed 41 players, including the new badge:
+
+```json
+{"type":"update","players":[{"badgeId":"demo-badge-003","scanCount":82,"lastScanDate":"2026-02-04T15:59:04.196Z"},...,{"badgeId":"demo-badge-041","scanCount":1,"lastScanDate":"2026-11-08T23:58:18.313Z"}]}
+```
+
+## How the import works
+
+- **Window subdivision instead of cursor paging.** The provider filters with exclusive `scanDateGT` / `scanDateLT` bounds and returns at most 1,000 rows. When a window returns a full page, the poller splits the window in half and fetches each half, recursing as needed. It does not page by the last timestamp, because many scans can share one timestamp. The right half starts one millisecond early so the exact split instant is not lost. If more than 1,000 scans share a single millisecond, the cycle fails rather than claiming completeness.
+- **One transaction per batch.** Each batch inserts its scans, increments counts only for rows that were actually new, and saves the batch's latest timestamp as the checkpoint. A crash mid-batch leaves the checkpoint where it was.
+- **Replay and dedup.** Each cycle resumes one millisecond before the checkpoint and relies on the unique `(badge_id, scan_date)` key to ignore rows it already has. After a restart, only the rows in the checkpoint's millisecond are fetched again.
+- **UTC throughout.** The provider sends timestamps without a zone (`2026-02-04T10:00:00.123`). The service reads them as UTC regardless of the host time zone and stores them as ISO strings with milliseconds, so checkpoints and filters compare correctly.
+- **Booth name.** It is taken from the first `customFields` entry that has a non-empty `"Booth Name"`. Scans without one are skipped.
+- **Defensive fetches.** Requests time out after 30 seconds, redirects are refused, responses over 8 MiB are rejected, and non-JSON responses fail the batch. Each request retries three times with exponential backoff. Failure logs carry only the error message, never the request body that holds the token.
+- **Shutdown.** On SIGTERM the service stops the cron task and waits for a running cycle to commit. It then closes WebSocket clients with code 1001 (terminating stragglers after two seconds), and finally closes the server and database.
+
+## Tests and checks
+
+```sh
+npm test            # Vitest: 39 tests in 10 files
+npm run typecheck   # tsc over sources and tests
+npm run lint        # ESLint with typescript-eslint
+```
+
+The suite uses no network beyond loopback:
+
+- **End-to-end poll:** real HTTP to the fake provider on an ephemeral port, into in-memory SQLite. It covers subdivision, checkpointing, a no-op second cycle and a rejected token.
+- **API and WebSocket:** supertest against `createApp`, plus a WebSocket snapshot and update.
+- **Units:** timestamp parsing (including a non-UTC host zone), the scheduler's shutdown wait, and the repositories.
+
+## Limits
+
+- **No authentication.** The REST API and WebSocket feed have none, and they expose badge visit histories. The server binds to loopback by default. Put it behind an authenticated boundary, and agree on retention, before exposing it.
+- **Dedup key.** Deduplication is by `(badgeId, scanDate)`, so one badge scanned at two booths in the same millisecond counts once.
+- **Late arrivals.** Scans the provider back-fills earlier than the checkpoint are not picked up. The provider's real ordering and late-arrival behaviour have not been verified against a live account.
+- **Full-list messages.** Each WebSocket message and `GET /players` carry every badge, which is fine for hundreds of attendees but not for very large events.
+- **Single writer.** One process owns the SQLite file. Running several instances needs a different storage and locking design.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
