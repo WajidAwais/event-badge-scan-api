@@ -6,7 +6,7 @@ const EnvSchema = z.object({
   API_TOKEN: z.string().min(1),
   EVENT_START_DATE: z.iso.datetime({ offset: true }).default(new Date(0).toISOString()),
   POLL_INTERVAL_CRON: z.string().default("*/5 * * * *"),
-  DB_PATH: z.string().default("./fankave.db"),
+  DB_PATH: z.string().default("./data/booth-scans.db"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),

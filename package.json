@@ -1,8 +1,11 @@
 {
-  "name": "fankave",
+  "name": "booth-scan-tracking-service",
   "version": "1.0.0",
   "private": true,
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node --env-file-if-exists=.env dist/index.js",
