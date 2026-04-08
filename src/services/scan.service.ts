@@ -20,7 +20,8 @@ export function toValidScan(raw: RawScan): Scan | null {
 
 /**
  * Runs one full polling cycle: fetches all pages since the last checkpoint,
- * persists new scans inside atomic transactions, and broadcasts after each page.
+ * persists new scans inside atomic transactions, and broadcasts after each page
+ * that changed a count.
  */
 export async function runPollCycle(db: Database.Database): Promise<void> {
   const scanRepo = createScanRepository(db);
@@ -69,7 +70,9 @@ export async function runPollCycle(db: Database.Database): Promise<void> {
       "Batch processed",
     );
 
-    broadcastPlayerCounts(playerRepo.getAllPlayerCounts());
+    if (newInBatch > 0) {
+      broadcastPlayerCounts(playerRepo.getAllPlayerCounts());
+    }
   }
 
   logger.info({ totalNew }, "Poll cycle complete");

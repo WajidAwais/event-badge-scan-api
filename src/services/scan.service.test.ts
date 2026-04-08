@@ -5,6 +5,7 @@ import { openDatabase } from "../db/client.js";
 import { createCheckpointRepository } from "../repositories/checkpoint.repository.js";
 import { createPlayerRepository } from "../repositories/player.repository.js";
 import { fetchAllScansInRange } from "./poller.service.js";
+import { broadcastPlayerCounts } from "../websocket/broadcaster.js";
 import { runPollCycle, toValidScan } from "./scan.service.js";
 
 vi.mock("./poller.service.js", () => ({ fetchAllScansInRange: vi.fn() }));
@@ -25,6 +26,7 @@ describe("runPollCycle", () => {
 
   beforeEach(() => {
     vi.mocked(fetchAllScansInRange).mockReset();
+    vi.mocked(broadcastPlayerCounts).mockReset();
     db = openDatabase(":memory:");
   });
 
@@ -50,6 +52,16 @@ describe("runPollCycle", () => {
     serveBatches([scan("demo-badge-001", "2026-02-04T10:00:00.000Z")]);
     await runPollCycle(db);
     expect(createPlayerRepository(db).getPlayerById("demo-badge-001")?.scanCount).toBe(1);
+  });
+
+  it("broadcasts only for batches that changed a count", async () => {
+    const first = scan("demo-badge-001", "2026-02-04T10:00:00");
+    serveBatches([first], [first], [scan("demo-badge-002", "2026-02-04T10:05:00", " ")]);
+    await runPollCycle(db);
+    expect(broadcastPlayerCounts).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(broadcastPlayerCounts).mock.calls[0]?.[0]).toEqual([
+      { badgeId: "demo-badge-001", scanCount: 1, lastScanDate: "2026-02-04T10:00:00.000Z" },
+    ]);
   });
 
   it("resumes one millisecond before the stored checkpoint", async () => {
