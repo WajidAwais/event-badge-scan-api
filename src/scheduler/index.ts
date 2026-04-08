@@ -10,6 +10,10 @@ export interface PollScheduler {
 }
 
 export function startScheduler(db: Database.Database): PollScheduler {
+  const pollOptions = {
+    source: { url: env.API_URL, token: env.API_TOKEN },
+    eventStartDate: env.EVENT_START_DATE,
+  };
   let inFlight: Promise<void> | null = null;
   let stopped = false;
 
@@ -19,7 +23,7 @@ export function startScheduler(db: Database.Database): PollScheduler {
       logger.warn("Poll cycle already in progress, skipping this tick");
       return;
     }
-    inFlight = runPollCycle(db)
+    inFlight = runPollCycle(db, pollOptions)
       .catch((err: unknown) => {
         // Log the message only: transport errors carry the request body, which holds the token.
         // The next tick resumes from the last committed checkpoint.

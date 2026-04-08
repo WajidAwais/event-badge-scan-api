@@ -4,10 +4,9 @@ import type { Scan } from "../types/domain.js";
 import { createScanRepository } from "../repositories/scan.repository.js";
 import { createPlayerRepository } from "../repositories/player.repository.js";
 import { createCheckpointRepository } from "../repositories/checkpoint.repository.js";
-import { fetchAllScansInRange } from "./poller.service.js";
+import { fetchAllScansInRange, type ScanSource } from "./poller.service.js";
 import { broadcastPlayerCounts } from "../websocket/broadcaster.js";
 import { logger } from "../utils/logger.js";
-import { env } from "../config/env.js";
 import { parseScanDate, toCanonicalScanDate } from "../utils/scan-date.js";
 
 export function toValidScan(raw: RawScan): Scan | null {
@@ -23,20 +22,26 @@ export function toValidScan(raw: RawScan): Scan | null {
  * persists new scans inside atomic transactions, and broadcasts after each page
  * that changed a count.
  */
-export async function runPollCycle(db: Database.Database): Promise<void> {
+export interface PollOptions {
+  source: ScanSource;
+  /** Where the first poll starts when no checkpoint is stored yet. */
+  eventStartDate: string;
+}
+
+export async function runPollCycle(db: Database.Database, options: PollOptions): Promise<void> {
   const scanRepo = createScanRepository(db);
   const playerRepo = createPlayerRepository(db);
   const checkpointRepo = createCheckpointRepository(db);
 
   const checkpoint = checkpointRepo.getLastScanDate();
-  const fromDate = checkpoint ? new Date(parseScanDate(checkpoint) - 1).toISOString() : env.EVENT_START_DATE;
+  const fromDate = checkpoint ? new Date(parseScanDate(checkpoint) - 1).toISOString() : options.eventStartDate;
   const upperBoundExclusive = new Date().toISOString();
 
   logger.info({ fromDate, upperBoundExclusive }, "Poll cycle started");
 
   let totalNew = 0;
 
-  for await (const rawBatch of fetchAllScansInRange(fromDate, upperBoundExclusive)) {
+  for await (const rawBatch of fetchAllScansInRange(options.source, fromDate, upperBoundExclusive)) {
     const validScans = rawBatch.flatMap((r) => {
       const scan = toValidScan(r);
       return scan ? [scan] : [];

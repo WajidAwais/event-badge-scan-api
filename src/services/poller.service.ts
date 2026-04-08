@@ -1,5 +1,4 @@
 import axios from "axios";
-import { env } from "../config/env.js";
 import { MAX_BATCH_SIZE } from "../config/constants.js";
 import { ApiResponseSchema } from "../types/api.js";
 import type { RawScan } from "../types/api.js";
@@ -17,18 +16,24 @@ function boundsToQueryParams(loMs: number, hiMs: number): { scanDateGT: string; 
   return { scanDateGT: loIso.slice(0, 23), scanDateLT: hiIso.slice(0, 23) };
 }
 
-function buildScanUrl(scanDateGT: string, scanDateLT: string): string {
-  const u = new URL(env.API_URL);
+/** Where scans are fetched from; passed in so tests can point at a local fake provider. */
+export interface ScanSource {
+  url: string;
+  token: string;
+}
+
+function buildScanUrl(source: ScanSource, scanDateGT: string, scanDateLT: string): string {
+  const u = new URL(source.url);
   u.searchParams.set("scanDateGT", scanDateGT);
   u.searchParams.set("scanDateLT", scanDateLT);
   return u.toString();
 }
 
-async function fetchBatchBetween(loMs: number, hiMs: number): Promise<RawScan[]> {
+async function fetchBatchBetween(source: ScanSource, loMs: number, hiMs: number): Promise<RawScan[]> {
   const { scanDateGT, scanDateLT } = boundsToQueryParams(loMs, hiMs);
-  const url = buildScanUrl(scanDateGT, scanDateLT);
+  const url = buildScanUrl(source, scanDateGT, scanDateLT);
 
-  const response = await axios.post<unknown>(url, { token: env.API_TOKEN }, {
+  const response = await axios.post<unknown>(url, { token: source.token }, {
     headers: { "Content-Type": "application/json" },
     timeout: 30_000,
     validateStatus: () => true,
@@ -60,14 +65,14 @@ async function fetchBatchBetween(loMs: number, hiMs: number): Promise<RawScan[]>
  * Recursively subdivides the exclusive window (loMs, hiMs) until each API response
  * has fewer than MAX_BATCH_SIZE rows, so no poll cycle stops after a single full page.
  */
-async function* fetchRangeMs(loMs: number, hiMs: number): AsyncGenerator<RawScan[]> {
+async function* fetchRangeMs(source: ScanSource, loMs: number, hiMs: number): AsyncGenerator<RawScan[]> {
   if (loMs >= hiMs) {
     return;
   }
 
   logger.info({ loMs, hiMs }, "Fetching scan range from API");
 
-  const batch = await retryWithBackoff(() => fetchBatchBetween(loMs, hiMs));
+  const batch = await retryWithBackoff(() => fetchBatchBetween(source, loMs, hiMs));
 
   logger.info({ count: batch.length, loMs, hiMs }, "Scan range batch received");
 
@@ -101,9 +106,9 @@ async function* fetchRangeMs(loMs: number, hiMs: number): AsyncGenerator<RawScan
     throw new Error("Scan fetch: could not compute an interior split point for overflow batch");
   }
 
-  yield* fetchRangeMs(loMs, split);
+  yield* fetchRangeMs(source, loMs, split);
   // Exclusive bounds need a one-millisecond overlap to retain the split instant.
-  yield* fetchRangeMs(split - 1, hiMs);
+  yield* fetchRangeMs(source, split - 1, hiMs);
 }
 
 /**
@@ -112,6 +117,7 @@ async function* fetchRangeMs(loMs: number, hiMs: number): AsyncGenerator<RawScan
  * order so checkpoint advancement stays monotonic.
  */
 export async function* fetchAllScansInRange(
+  source: ScanSource,
   fromDate: string,
   upperBoundExclusive: string,
 ): AsyncGenerator<RawScan[]> {
@@ -121,5 +127,5 @@ export async function* fetchAllScansInRange(
     logger.warn({ fromDate, upperBoundExclusive }, "Empty fetch range (lower >= upper), skipping");
     return;
   }
-  yield* fetchRangeMs(loMs, hiMs);
+  yield* fetchRangeMs(source, loMs, hiMs);
 }

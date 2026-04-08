@@ -11,6 +11,11 @@ import { runPollCycle, toValidScan } from "./scan.service.js";
 vi.mock("./poller.service.js", () => ({ fetchAllScansInRange: vi.fn() }));
 vi.mock("../websocket/broadcaster.js", () => ({ broadcastPlayerCounts: vi.fn() }));
 
+const options = {
+  source: { url: "http://127.0.0.1:9/api/scan", token: "test-token" },
+  eventStartDate: "2026-02-04T00:00:00.000Z",
+};
+
 function scan(badgeId: string, scanDate: string, booth = "Demo booth"): RawScan {
   return { badgeId, scanDate, customFields: [{ "Booth Name": booth }] };
 }
@@ -32,7 +37,7 @@ describe("runPollCycle", () => {
 
   it("stores zone-less provider timestamps as UTC ISO strings", async () => {
     serveBatches([scan("demo-badge-001", "2026-02-04T10:00:00.250")]);
-    await runPollCycle(db);
+    await runPollCycle(db, options);
     const row = db.prepare<[], { scan_date: string }>("SELECT scan_date FROM scans").get();
     expect(row?.scan_date).toBe("2026-02-04T10:00:00.250Z");
   });
@@ -42,22 +47,22 @@ describe("runPollCycle", () => {
       scan("demo-badge-001", "2026-02-04T10:00:00.900"),
       scan("demo-badge-002", "2026-02-04T11:00:00+02:00"),
     ]);
-    await runPollCycle(db);
+    await runPollCycle(db, options);
     expect(createCheckpointRepository(db).getLastScanDate()).toBe("2026-02-04T10:00:00.900Z");
   });
 
   it("does not count a replayed scan twice when its spelling changes", async () => {
     serveBatches([scan("demo-badge-001", "2026-02-04T10:00:00")]);
-    await runPollCycle(db);
+    await runPollCycle(db, options);
     serveBatches([scan("demo-badge-001", "2026-02-04T10:00:00.000Z")]);
-    await runPollCycle(db);
+    await runPollCycle(db, options);
     expect(createPlayerRepository(db).getPlayerById("demo-badge-001")?.scanCount).toBe(1);
   });
 
   it("broadcasts only for batches that changed a count", async () => {
     const first = scan("demo-badge-001", "2026-02-04T10:00:00");
     serveBatches([first], [first], [scan("demo-badge-002", "2026-02-04T10:05:00", " ")]);
-    await runPollCycle(db);
+    await runPollCycle(db, options);
     expect(broadcastPlayerCounts).toHaveBeenCalledTimes(1);
     expect(vi.mocked(broadcastPlayerCounts).mock.calls[0]?.[0]).toEqual([
       { badgeId: "demo-badge-001", scanCount: 1, lastScanDate: "2026-02-04T10:00:00.000Z" },
@@ -67,8 +72,8 @@ describe("runPollCycle", () => {
   it("resumes one millisecond before the stored checkpoint", async () => {
     createCheckpointRepository(db).setLastScanDate("2026-02-04T10:00:00.500Z");
     serveBatches();
-    await runPollCycle(db);
-    expect(vi.mocked(fetchAllScansInRange).mock.calls[0]?.[0]).toBe("2026-02-04T10:00:00.499Z");
+    await runPollCycle(db, options);
+    expect(vi.mocked(fetchAllScansInRange).mock.calls[0]?.[1]).toBe("2026-02-04T10:00:00.499Z");
   });
 });
 

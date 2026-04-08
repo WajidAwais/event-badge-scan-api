@@ -3,29 +3,16 @@ import axios from "axios";
 import type { RawScan } from "../types/api.js";
 import { fetchAllScansInRange } from "./poller.service.js";
 
+const source = { url: "http://fake-provider.test/api/scan", token: "test-token" };
+
 vi.mock("axios", () => ({
   default: {
     post: vi.fn(),
   },
 }));
 
-vi.mock("../config/env.js", () => ({
-  env: {
-    API_URL: "https://portal.example.com/api/scan",
-    API_TOKEN: "test-token",
-  },
-}));
-
 vi.mock("../utils/retry.js", () => ({
   retryWithBackoff: <T,>(fn: () => Promise<T>): Promise<T> => fn(),
-}));
-
-vi.mock("../utils/logger.js", () => ({
-  logger: {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
 }));
 
 function okJson(data: unknown) {
@@ -57,6 +44,7 @@ describe("fetchAllScansInRange", () => {
 
     const batches: RawScan[][] = [];
     for await (const b of fetchAllScansInRange(
+      source,
       "2026-02-09T00:00:00.000Z",
       "2026-02-10T00:00:00.000Z",
     )) {
@@ -92,6 +80,7 @@ describe("fetchAllScansInRange", () => {
 
     const batches: RawScan[][] = [];
     for await (const b of fetchAllScansInRange(
+      source,
       "2026-06-01T00:00:00.000Z",
       "2026-06-10T00:00:00.000Z",
     )) {
@@ -109,7 +98,7 @@ describe("fetchAllScansInRange", () => {
     );
     vi.mocked(axios.post).mockResolvedValue(okJson(big));
 
-    const gen = fetchAllScansInRange("1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00.002Z");
+    const gen = fetchAllScansInRange(source, "1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00.002Z");
     await expect(async () => {
       for await (const _ of gen) {
         /* drain */
@@ -120,6 +109,7 @@ describe("fetchAllScansInRange", () => {
   it("yields nothing when lower bound is not before upper bound", async () => {
     const batches: RawScan[][] = [];
     for await (const b of fetchAllScansInRange(
+      source,
       "2026-02-10T00:00:00.000Z",
       "2026-02-09T00:00:00.000Z",
     )) {
@@ -143,7 +133,7 @@ describe("exclusive window boundaries", () => {
       return okJson(rows.filter(r => Date.parse(r.scanDate) > lo && Date.parse(r.scanDate) < hi).slice(0, 1000));
     });
     const received: RawScan[] = [];
-    for await (const batch of fetchAllScansInRange(new Date(origin).toISOString(), new Date(origin + 2000).toISOString())) received.push(...batch);
+    for await (const batch of fetchAllScansInRange(source, new Date(origin).toISOString(), new Date(origin + 2000).toISOString())) received.push(...batch);
     expect(new Set(received.map(r => r.badgeId)).size).toBe(1001);
     expect(received.some(r => r.scanDate === new Date(origin + 1000).toISOString())).toBe(true);
   });
