@@ -1,16 +1,17 @@
+import fs from "node:fs";
+import path from "node:path";
 import Database from "better-sqlite3";
-import { env } from "../config/env.js";
 
-let _db: Database.Database | null = null;
-
-export function getDb(): Database.Database {
-  if (!_db) {
-    _db = new Database(env.DB_PATH);
-    _db.pragma("journal_mode = WAL");
-    _db.pragma("foreign_keys = ON");
-    runMigrations(_db);
+/** Opens (creating if needed) the SQLite file at `filePath`; ":memory:" is accepted for tests. */
+export function openDatabase(filePath: string): Database.Database {
+  if (filePath !== ":memory:") {
+    fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
   }
-  return _db;
+  const db = new Database(filePath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  runMigrations(db);
+  return db;
 }
 
 function runMigrations(db: Database.Database): void {
