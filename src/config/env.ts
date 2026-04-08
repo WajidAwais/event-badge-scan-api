@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 const EnvSchema = z.object({
+  // Loopback by default: the API is unauthenticated. The container image sets 0.0.0.0.
+  HOST: z.string().min(1).default("127.0.0.1"),
   PORT: z.coerce.number().int().positive().default(3000),
   API_URL: z.url({ protocol: /^https?$/ }),
   API_TOKEN: z.string().min(1),

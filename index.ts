@@ -15,8 +15,8 @@ const wss = createWsServer(httpServer, () => playerRepo.getAllPlayerCounts());
 
 let scheduler: PollScheduler | null = null;
 
-httpServer.listen(env.PORT, "127.0.0.1", () => {
-  logger.info({ port: env.PORT }, "HTTP + WebSocket server listening");
+httpServer.listen(env.PORT, env.HOST, () => {
+  logger.info({ host: env.HOST, port: env.PORT }, "HTTP + WebSocket server listening");
   scheduler = startScheduler(db);
 });
 

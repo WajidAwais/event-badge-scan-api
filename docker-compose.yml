@@ -1,0 +1,42 @@
+# Runs the service against the bundled fake scan provider with demo data only.
+services:
+  fake-upstream:
+    image: booth-scan-tracking-service:local
+    build: .
+    command: ["node", "dist/src/fake-upstream/main.js"]
+    environment:
+      FAKE_UPSTREAM_HOST: 0.0.0.0
+      FAKE_UPSTREAM_PORT: "4010"
+      FAKE_UPSTREAM_TOKEN: demo-token
+      EVENT_START_DATE: "2026-02-04T08:00:00.000Z"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4010/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: booth-scan-tracking-service:local
+    build: .
+    depends_on:
+      fake-upstream:
+        condition: service_healthy
+    environment:
+      API_URL: http://fake-upstream:4010/api/scan
+      API_TOKEN: demo-token
+      EVENT_START_DATE: "2026-02-04T08:00:00.000Z"
+      # Six fields: poll every 15 seconds so the demo shows live updates quickly.
+      POLL_INTERVAL_CRON: "*/15 * * * * *"
+      LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - scan-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  scan-data:
