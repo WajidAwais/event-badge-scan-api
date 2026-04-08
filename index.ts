@@ -9,7 +9,7 @@ import { createScansRouter } from "./src/api/routes/scans.js";
 import healthRouter from "./src/api/routes/health.js";
 import { errorHandler } from "./src/api/middleware/error-handler.js";
 import { notFoundHandler } from "./src/api/middleware/not-found.js";
-import { startScheduler } from "./src/scheduler/index.js";
+import { startScheduler, type PollScheduler } from "./src/scheduler/index.js";
 import { createPlayerRepository } from "./src/repositories/player.repository.js";
 import { logger } from "./src/utils/logger.js";
 
@@ -28,20 +28,34 @@ app.use(errorHandler);
 const httpServer = http.createServer(app);
 
 const playerRepo = createPlayerRepository(db);
-createWsServer(httpServer, () => playerRepo.getAllPlayerCounts());
+const wss = createWsServer(httpServer, () => playerRepo.getAllPlayerCounts());
+
+let scheduler: PollScheduler | null = null;
 
 httpServer.listen(env.PORT, "127.0.0.1", () => {
   logger.info({ port: env.PORT }, "HTTP + WebSocket server listening");
-  startScheduler(db);
+  scheduler = startScheduler(db);
 });
 
-function shutdown(signal: string): void {
+let shuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info({ signal }, "Shutting down gracefully");
-  httpServer.close(() => {
-    db.close();
-    process.exit(0);
-  });
+
+  // Let a running poll finish its transaction before the database closes.
+  await scheduler?.stop();
+
+  for (const client of wss.clients) client.close(1001, "Server shutting down");
+  // Clients that ignore the close frame would otherwise keep httpServer.close() waiting.
+  setTimeout(() => wss.clients.forEach((client) => client.terminate()), 2_000).unref();
+  wss.close();
+
+  await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  db.close();
+  logger.info("Shutdown complete");
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

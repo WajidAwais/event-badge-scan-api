@@ -4,34 +4,44 @@ import { runPollCycle } from "../services/scan.service.js";
 import { logger } from "../utils/logger.js";
 import { env } from "../config/env.js";
 
-let isRunning = false;
-
-async function safePollCycle(db: Database.Database): Promise<void> {
-  if (isRunning) {
-    logger.warn("Poll cycle already in progress, skipping this tick");
-    return;
-  }
-
-  isRunning = true;
-  try {
-    await runPollCycle(db);
-  } catch (err) {
-    // retryWithBackoff already exhausted its attempts — log and continue.
-    // Resume from the last committed checkpoint; provider late arrivals still need reconciliation.
-    logger.error({}, "Poll cycle failed after all retries, will resume next tick");
-  } finally {
-    isRunning = false;
-  }
+export interface PollScheduler {
+  /** Stops future ticks and resolves once any in-flight cycle has finished. */
+  stop(): Promise<void>;
 }
 
-export function startScheduler(db: Database.Database): void {
+export function startScheduler(db: Database.Database): PollScheduler {
+  let inFlight: Promise<void> | null = null;
+  let stopped = false;
+
+  function tick(): void {
+    if (stopped) return;
+    if (inFlight) {
+      logger.warn("Poll cycle already in progress, skipping this tick");
+      return;
+    }
+    inFlight = runPollCycle(db)
+      .catch((err: unknown) => {
+        // Log the message only: transport errors carry the request body, which holds the token.
+        // The next tick resumes from the last committed checkpoint.
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.error({ reason }, "Poll cycle failed after all retries, will resume next tick");
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+  }
+
   logger.info({ cron: env.POLL_INTERVAL_CRON }, "Starting poll scheduler");
+  const task = cron.schedule(env.POLL_INTERVAL_CRON, tick);
 
-  cron.schedule(env.POLL_INTERVAL_CRON, () => {
-    void safePollCycle(db);
-  });
+  // Poll once at startup instead of waiting for the first cron tick.
+  tick();
 
-  // Run one cycle immediately on startup so we don't wait up to 5 minutes
-  // for the first data point.
-  void safePollCycle(db);
+  return {
+    async stop() {
+      stopped = true;
+      await task.stop();
+      await inFlight;
+    },
+  };
 }
